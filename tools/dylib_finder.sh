@@ -375,17 +375,28 @@ check_code_signing() {
 }
 
 # Function to check if binary is vulnerable to environment variable-based hijacking
+# Function to check if binary is vulnerable to environment variable-based hijacking
 check_env_var_hijacking() {
     local binary="$1"
     local binary_name=$(basename "$binary")
-    
+
     echo -e "${GREEN}[+] Checking for environment variable hijacking vulnerability in ${binary_name}${NC}" | tee -a "$CONSOLE_LOG"
-    
     echo -e "\n==== Environment Variable Hijacking Analysis for $binary ====" >> "$MASTER_LOG"
-    
+
+    # Capture codesign info once
+    local cs_info=$(codesign -dv "$binary" 2>&1)
+
+    # If library validation is enabled, this binary is protected
+    if echo "$cs_info" | grep -q "library-validation"; then
+        echo -e "${RED}    [-] Has library validation - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
+        echo "  - Has library validation - cannot exploit with DYLD_INSERT_LIBRARIES" >> "$MASTER_LOG"
+        echo "false"
+        return
+    fi
+
     # Initialize vulnerability status
     local is_vulnerable=true
-    
+
     # Check for __RESTRICT segment
     if otool -l "$binary" 2>/dev/null | grep -q "__RESTRICT"; then
         echo -e "${RED}    [-] Has __RESTRICT segment - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
@@ -395,7 +406,7 @@ check_env_var_hijacking() {
         echo -e "${GREEN}    [+] No __RESTRICT segment${NC}" | tee -a "$CONSOLE_LOG"
         echo "  - No __RESTRICT segment found" >> "$MASTER_LOG"
     fi
-    
+
     # Check setuid/setgid bits
     if [ -u "$binary" ] || [ -g "$binary" ]; then
         echo -e "${RED}    [-] Has setuid/setgid bits - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
@@ -405,14 +416,11 @@ check_env_var_hijacking() {
         echo -e "${GREEN}    [+] No setuid/setgid bits${NC}" | tee -a "$CONSOLE_LOG"
         echo "  - No setuid/setgid bits" >> "$MASTER_LOG"
     fi
-    
-    # Check code signing flags
-    local cs_info=$(codesign -dv "$binary" 2>&1)
-    
+
     # Save raw codesign output for debugging
     echo "  - Raw codesign output:" >> "$MASTER_LOG"
     echo "$cs_info" | sed 's/^/    /' >> "$MASTER_LOG"
-    
+
     # Check for CS_RESTRICT flag (prevents env var hijacking)
     if echo "$cs_info" | grep -q "restrict"; then
         echo -e "${RED}    [-] Has CS_RESTRICT flag - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
@@ -422,23 +430,21 @@ check_env_var_hijacking() {
         echo -e "${GREEN}    [+] No CS_RESTRICT flag${NC}" | tee -a "$CONSOLE_LOG"
         echo "  - No CS_RESTRICT flag" >> "$MASTER_LOG"
     fi
-    
+
     # Report final vulnerability assessment
     if [ "$is_vulnerable" = true ]; then
         echo -e "${YELLOW}    [!] Vulnerable to environment variable hijacking (DYLD_INSERT_LIBRARIES)${NC}" | tee -a "$CONSOLE_LOG"
         echo "  - VULNERABLE: Can be exploited with DYLD_INSERT_LIBRARIES" >> "$MASTER_LOG"
-        
+
         # Add to environment variable vulnerability log
         echo "$binary|DYLD_INSERT_LIBRARIES|ENV_VAR_HIJACKING" >> "$ENV_VAR_LOG"
-        
+
         # Add example exploitation command to the log
         echo "  - Example exploitation: DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib $binary" >> "$MASTER_LOG"
-        
-        # Return the string "true"
+
         echo "true"
     else
         echo -e "  - NOT VULNERABLE to environment variable hijacking" >> "$MASTER_LOG"
-        # Return the string "false"
         echo "false"
     fi
 }
