@@ -190,7 +190,11 @@ check_weak_dylibs() {
     
     rm "${TEMP_DIR}/${binary_name}_weak.txt" 2>/dev/null
     
-    echo "$vulnerable"
+    if [ "$vulnerable" = true ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
 }
 
 # Function to resolve application directory path
@@ -306,7 +310,11 @@ check_rpath_deps() {
     
     rm "${TEMP_DIR}/${binary_name}_rpath.txt" 2>/dev/null
     
-    echo "$vulnerable"
+    if [ "$vulnerable" = true ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
 }
 
 # Function to check code signing restrictions
@@ -359,7 +367,11 @@ check_code_signing() {
         lib_validation_vulnerable=true
     fi
     
-    echo "$lib_validation_vulnerable"
+    if [ "$lib_validation_vulnerable" = true ]; then
+        echo "true"
+    else
+        echo "false"
+    fi
 }
 
 # Function to check if binary is vulnerable to environment variable-based hijacking
@@ -421,11 +433,14 @@ check_env_var_hijacking() {
         
         # Add example exploitation command to the log
         echo "  - Example exploitation: DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib $binary" >> "$MASTER_LOG"
+        
+        # Return the string "true"
+        echo "true"
     else
         echo -e "  - NOT VULNERABLE to environment variable hijacking" >> "$MASTER_LOG"
+        # Return the string "false"
+        echo "false"
     fi
-    
-    echo "$is_vulnerable"
 }
 
 # Main function
@@ -496,6 +511,12 @@ main() {
         rpath_vulnerable=$(check_rpath_deps "$binary")
         libval_vulnerable=$(check_code_signing "$binary")
         envvar_vulnerable=$(check_env_var_hijacking "$binary")
+        
+        # Debug output
+        echo "Debug - weak_vulnerable: $weak_vulnerable" >> "$MASTER_LOG"
+        echo "Debug - rpath_vulnerable: $rpath_vulnerable" >> "$MASTER_LOG" 
+        echo "Debug - libval_vulnerable: $libval_vulnerable" >> "$MASTER_LOG"
+        echo "Debug - envvar_vulnerable: $envvar_vulnerable" >> "$MASTER_LOG"
         
         # Count vulnerabilities for this binary
         binary_vulnerable=false
@@ -578,61 +599,4 @@ main() {
     if [ $envvar_vuln_count -gt 0 ]; then
         echo "ENVIRONMENT VARIABLE HIJACKING VULNERABILITIES:" >> "$SUMMARY_LOG"
         echo "These binaries can be exploited with DYLD_INSERT_LIBRARIES:" >> "$SUMMARY_LOG"
-        grep -v "^#" "$ENV_VAR_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
-        echo "" >> "$SUMMARY_LOG"
-    fi
-    
-    echo "For detailed analysis, see the master report file: $MASTER_LOG" >> "$SUMMARY_LOG"
-    echo "" >> "$SUMMARY_LOG"
-    
-    # Print output location information
-    echo -e "${GREEN}[+] Scan complete! Results saved to: ${OUTPUT_DIR}/${NC}" | tee -a "$CONSOLE_LOG"
-    echo -e "${GREEN}[+] Summary report: ${SUMMARY_LOG}${NC}" | tee -a "$CONSOLE_LOG"
-    echo -e "${GREEN}[+] Detailed report: ${MASTER_LOG}${NC}" | tee -a "$CONSOLE_LOG"
-    
-    # Create a formatted vulnerability target list if any vulnerabilities found
-    if [ $total_vuln_count -gt 0 ]; then
-        TARGET_LIST="${OUTPUT_DIR}/high_value_targets.txt"
-        echo "# High-Value Exploitation Targets" > "$TARGET_LIST"
-        echo "# ===============================" >> "$TARGET_LIST"
-        echo "# These targets have been identified as high-value for dylib hijacking" >> "$TARGET_LIST"
-        echo "" >> "$TARGET_LIST"
-        
-        if [ $weak_vuln_count -gt 0 ]; then
-            echo "## Weak Dylib Targets" >> "$TARGET_LIST"
-            grep -v "^#" "$WEAK_DYLIBS_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
-            echo "" >> "$TARGET_LIST"
-        fi
-        
-        if [ $rpath_vuln_count -gt 0 ]; then
-            echo "## RPATH Hijacking Targets" >> "$TARGET_LIST"
-            grep -v "^#" "$RPATH_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
-            echo "" >> "$TARGET_LIST"
-        fi
-        
-        if [ $envvar_vuln_count -gt 0 ]; then
-            echo "## Environment Variable Hijacking Targets" >> "$TARGET_LIST"
-            grep -v "^#" "$ENV_VAR_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
-            echo "" >> "$TARGET_LIST"
-            
-            # Generate quick exploitation commands
-            EXPLOITS_FILE="${OUTPUT_DIR}/exploitation_commands.txt"
-            echo "# Quick Exploitation Commands for Environment Variable Hijacking" > "$EXPLOITS_FILE"
-            echo "# =======================================================" >> "$EXPLOITS_FILE"
-            echo "# Use these commands to test DYLD_INSERT_LIBRARIES hijacking with the basic_injection.dylib template" >> "$EXPLOITS_FILE"
-            echo "" >> "$EXPLOITS_FILE"
-            
-            grep -v "^#" "$ENV_VAR_LOG" | sort | uniq | awk -F'|' '{printf "DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib %s\n", $1}' >> "$EXPLOITS_FILE"
-            
-            echo -e "${GREEN}[+] Exploitation commands: ${EXPLOITS_FILE}${NC}" | tee -a "$CONSOLE_LOG"
-        fi
-        
-        echo -e "${GREEN}[+] High-value targets list: ${TARGET_LIST}${NC}" | tee -a "$CONSOLE_LOG"
-    fi
-    
-    # Cleanup
-    rm -rf "$TEMP_DIR"
-}
-
-# Run the main function
-main
+        grep -v "^#" "$
