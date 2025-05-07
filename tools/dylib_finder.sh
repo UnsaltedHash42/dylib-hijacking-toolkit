@@ -377,15 +377,24 @@ check_code_signing() {
 # Function to check if binary is vulnerable to environment variable-based hijacking
 # Function to check if binary is vulnerable to environment variable-based hijacking
 # Function to check if binary is vulnerable to environment variable-based hijacking
+# Function to check if binary is vulnerable to environment variable-based hijacking
 check_env_var_hijacking() {
     local binary="$1"
     local binary_name=$(basename "$binary")
+
+    # Skip shared libraries—DYLD_INSERT_LIBRARIES only affects executables at launch
+    if [[ "$binary" == *.dylib ]]; then
+        echo -e "${BLUE}    [i] Skipping env var hijack check for shared library${NC}" | tee -a "$CONSOLE_LOG"
+        echo "false"
+        return
+    fi
 
     echo -e "${GREEN}[+] Checking for environment variable hijacking vulnerability in ${binary_name}${NC}" | tee -a "$CONSOLE_LOG"
     echo -e "\n==== Environment Variable Hijacking Analysis for $binary ====" >> "$MASTER_LOG"
 
     # Capture codesign info once
-    local cs_info=$(codesign -dv "$binary" 2>&1)
+    local cs_info
+    cs_info=$(codesign -dv "$binary" 2>&1)
 
     # If Hardened Runtime is enabled, DYLD_INSERT_LIBRARIES is blocked by default
     if echo "$cs_info" | grep -q "(runtime)"; then
@@ -456,6 +465,8 @@ check_env_var_hijacking() {
         echo -e "  - NOT VULNERABLE to environment variable hijacking" >> "$MASTER_LOG"
         echo "false"
     fi
+}
+
 }
 
 
