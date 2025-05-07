@@ -578,7 +578,28 @@ main() {
     if [ $weak_vuln_count -gt 0 ]; then
         echo "WEAK DYLIB VULNERABILITIES:" >> "$SUMMARY_LOG"
         echo "These binaries reference weak dylibs that don't exist and could be hijacked:" >> "$SUMMARY_LOG"
-        #" "$ENV_VAR_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
+        grep -v "^#" "$WEAK_DYLIBS_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
+        echo "" >> "$SUMMARY_LOG"
+    fi
+    
+    if [ $rpath_vuln_count -gt 0 ]; then
+        echo "RPATH ORDERING VULNERABILITIES:" >> "$SUMMARY_LOG"
+        echo "These binaries could be exploited through rpath search order:" >> "$SUMMARY_LOG"
+        grep -v "^#" "$RPATH_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
+        echo "" >> "$SUMMARY_LOG"
+    fi
+    
+    if [ $libval_vuln_count -gt 0 ]; then
+        echo "LIBRARY VALIDATION VULNERABILITIES:" >> "$SUMMARY_LOG"
+        echo "These binaries have missing or disabled library validation:" >> "$SUMMARY_LOG"
+        grep -v "^#" "$LIBRARY_VALIDATION_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
+        echo "" >> "$SUMMARY_LOG"
+    fi
+    
+    if [ $envvar_vuln_count -gt 0 ]; then
+        echo "ENVIRONMENT VARIABLE HIJACKING VULNERABILITIES:" >> "$SUMMARY_LOG"
+        echo "These binaries can be exploited with DYLD_INSERT_LIBRARIES:" >> "$SUMMARY_LOG"
+        R_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
         echo "" >> "$SUMMARY_LOG"
     fi
     
@@ -635,25 +656,4 @@ main() {
 }
 
 # Run the main function
-main#" "$WEAK_DYLIBS_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
-        echo "" >> "$SUMMARY_LOG"
-    fi
-    
-    if [ $rpath_vuln_count -gt 0 ]; then
-        echo "RPATH ORDERING VULNERABILITIES:" >> "$SUMMARY_LOG"
-        echo "These binaries could be exploited through rpath search order:" >> "$SUMMARY_LOG"
-        grep -v "^#" "$RPATH_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
-        echo "" >> "$SUMMARY_LOG"
-    fi
-    
-    if [ $libval_vuln_count -gt 0 ]; then
-        echo "LIBRARY VALIDATION VULNERABILITIES:" >> "$SUMMARY_LOG"
-        echo "These binaries have missing or disabled library validation:" >> "$SUMMARY_LOG"
-        grep -v "^#" "$LIBRARY_VALIDATION_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
-        echo "" >> "$SUMMARY_LOG"
-    fi
-    
-    if [ $envvar_vuln_count -gt 0 ]; then
-        echo "ENVIRONMENT VARIABLE HIJACKING VULNERABILITIES:" >> "$SUMMARY_LOG"
-        echo "These binaries can be exploited with DYLD_INSERT_LIBRARIES:" >> "$SUMMARY_LOG"
-        grep -v "^
+main
