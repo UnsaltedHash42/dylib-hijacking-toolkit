@@ -382,83 +382,94 @@ check_env_var_hijacking() {
     local binary="$1"
     local binary_name=$(basename "$binary")
 
-    # Skip shared libraries—DYLD_INSERT_LIBRARIES only affects executables at launch
-    if [[ "$binary" == *.dylib ]]; then
+    # 1) Skip shared libraries—DYLD_INSERT_LIBRARIES only affects executables at launch
+    if [[ "$binary" == *.dylib || "$binary" == *.so ]]; then
         echo -e "${BLUE}    [i] Skipping env var hijack check for shared library${NC}" | tee -a "$CONSOLE_LOG"
         echo "false"
         return
     fi
 
-    echo -e "${GREEN}[+] Checking for environment variable hijacking vulnerability in ${binary_name}${NC}" | tee -a "$CONSOLE_LOG"
-    echo -e "\n==== Environment Variable Hijacking Analysis for $binary ====" >> "$MASTER_LOG"
+    echo -e "${GREEN}[+] Checking for environment variable hijacking vulnerability in ${binary_name}${NC}" \
+         | tee -a "$CONSOLE_LOG"
+    echo -e "\n==== Environment Variable Hijacking Analysis for $binary ====" \
+         >> "$MASTER_LOG"
 
-    # Capture codesign info once
+    # 2) Pull entitlements (to catch the real library-validation flag)
+    local ents
+    ents=$(codesign -d --entitlements :- "$binary" 2>/dev/null || echo "")
+
+    if echo "$ents" | grep -q "com.apple.security.cs.library-validation"; then
+        echo -e "${RED}    [-] Has library-validation entitlement – cannot exploit${NC}" \
+             | tee -a "$CONSOLE_LOG"
+        echo "  - Has library-validation entitlement - cannot exploit with DYLD_INSERT_LIBRARIES" \
+             >> "$MASTER_LOG"
+        echo "false"
+        return
+    fi
+
+    # 3) Capture codesign info once for CS_RESTRICT check & debug
     local cs_info
     cs_info=$(codesign -dv "$binary" 2>&1)
 
-    # If Hardened Runtime is enabled, DYLD_INSERT_LIBRARIES is blocked by default
-    if echo "$cs_info" | grep -q "(runtime)"; then
-        echo -e "${RED}    [-] Has hardened runtime - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
-        echo "  - Has hardened runtime - cannot exploit with DYLD_INSERT_LIBRARIES" >> "$MASTER_LOG"
-        echo "false"
-        return
-    fi
-
-    # If library validation is enabled, this binary is protected
-    if echo "$cs_info" | grep -q "library-validation"; then
-        echo -e "${RED}    [-] Has library validation - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
-        echo "  - Has library validation - cannot exploit with DYLD_INSERT_LIBRARIES" >> "$MASTER_LOG"
-        echo "false"
-        return
-    fi
-
-    # Initialize vulnerability status
+    # 4) Initialize vulnerability status
     local is_vulnerable=true
 
-    # Check for __RESTRICT segment
+    # 5) Check for __RESTRICT segment
     if otool -l "$binary" 2>/dev/null | grep -q "__RESTRICT"; then
-        echo -e "${RED}    [-] Has __RESTRICT segment - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
-        echo "  - Has __RESTRICT segment - protected from environment variable hijacking" >> "$MASTER_LOG"
+        echo -e "${RED}    [-] Has __RESTRICT segment – protected${NC}" \
+             | tee -a "$CONSOLE_LOG"
+        echo "  - Has __RESTRICT segment - protected from environment variable hijacking" \
+             >> "$MASTER_LOG"
         is_vulnerable=false
     else
-        echo -e "${GREEN}    [+] No __RESTRICT segment${NC}" | tee -a "$CONSOLE_LOG"
+        echo -e "${GREEN}    [+] No __RESTRICT segment${NC}" \
+             | tee -a "$CONSOLE_LOG"
         echo "  - No __RESTRICT segment found" >> "$MASTER_LOG"
     fi
 
-    # Check setuid/setgid bits
+    # 6) Check setuid/setgid bits
     if [ -u "$binary" ] || [ -g "$binary" ]; then
-        echo -e "${RED}    [-] Has setuid/setgid bits - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
-        echo "  - Has setuid/setgid bits - protected from environment variable hijacking" >> "$MASTER_LOG"
+        echo -e "${RED}    [-] Has setuid/setgid bits – protected${NC}" \
+             | tee -a "$CONSOLE_LOG"
+        echo "  - Has setuid/setgid bits - protected from environment variable hijacking" \
+             >> "$MASTER_LOG"
         is_vulnerable=false
     else
-        echo -e "${GREEN}    [+] No setuid/setgid bits${NC}" | tee -a "$CONSOLE_LOG"
+        echo -e "${GREEN}    [+] No setuid/setgid bits${NC}" \
+             | tee -a "$CONSOLE_LOG"
         echo "  - No setuid/setgid bits" >> "$MASTER_LOG"
     fi
 
-    # Save raw codesign output for debugging
+    # 7) Dump raw codesign output for debugging
     echo "  - Raw codesign output:" >> "$MASTER_LOG"
     echo "$cs_info" | sed 's/^/    /' >> "$MASTER_LOG"
 
-    # Check for CS_RESTRICT flag (prevents env var hijacking)
-    if echo "$cs_info" | grep -q "restrict"; then
-        echo -e "${RED}    [-] Has CS_RESTRICT flag - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
-        echo "  - Has CS_RESTRICT flag - protected from environment variable hijacking" >> "$MASTER_LOG"
+    # 8) Check for CS_RESTRICT flag
+    if echo "$cs_info" | grep -qi "restrict"; then
+        echo -e "${RED}    [-] Has CS_RESTRICT flag – protected${NC}" \
+             | tee -a "$CONSOLE_LOG"
+        echo "  - Has CS_RESTRICT flag - protected from environment variable hijacking" \
+             >> "$MASTER_LOG"
         is_vulnerable=false
     else
-        echo -e "${GREEN}    [+] No CS_RESTRICT flag${NC}" | tee -a "$CONSOLE_LOG"
+        echo -e "${GREEN}    [+] No CS_RESTRICT flag${NC}" \
+             | tee -a "$CONSOLE_LOG"
         echo "  - No CS_RESTRICT flag" >> "$MASTER_LOG"
     fi
 
-    # Report final vulnerability assessment
+    # 9) Final verdict
     if [ "$is_vulnerable" = true ]; then
-        echo -e "${YELLOW}    [!] Vulnerable to environment variable hijacking (DYLD_INSERT_LIBRARIES)${NC}" | tee -a "$CONSOLE_LOG"
-        echo "  - VULNERABLE: Can be exploited with DYLD_INSERT_LIBRARIES" >> "$MASTER_LOG"
+        echo -e "${YELLOW}    [!] Vulnerable to environment variable hijacking (DYLD_INSERT_LIBRARIES)${NC}" \
+             | tee -a "$CONSOLE_LOG"
+        echo "  - VULNERABLE: Can be exploited with DYLD_INSERT_LIBRARIES" \
+             >> "$MASTER_LOG"
 
-        # Add to environment variable vulnerability log
+        # Log it
         echo "$binary|DYLD_INSERT_LIBRARIES|ENV_VAR_HIJACKING" >> "$ENV_VAR_LOG"
 
-        # Add example exploitation command to the log
-        echo "  - Example exploitation: DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib $binary" >> "$MASTER_LOG"
+        # Example command
+        echo "  - Example exploitation: DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib $binary" \
+             >> "$MASTER_LOG"
 
         echo "true"
     else
@@ -466,6 +477,7 @@ check_env_var_hijacking() {
         echo "false"
     fi
 }
+
 
 
 
