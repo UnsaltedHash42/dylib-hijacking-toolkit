@@ -4,144 +4,154 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dylib Hijack Scan Report</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/datatables@1.10.18/media/css/jquery.dataTables.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Mono:wght@400;700&family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
-        .severity-critical { color: #dc3545; }
-        .severity-high { color: #fd7e14; }
-        .severity-medium { color: #ffc107; }
-        .severity-low { color: #20c997; }
-        .severity-info { color: #0dcaf0; }
-        
-        .vulnerability-card {
-            margin-bottom: 1rem;
-            border-left: 4px solid;
+        body {
+            background: #181a1b;
+            color: #e0e0e0;
+            font-family: 'Inter', Arial, sans-serif;
         }
-        
-        .vulnerability-card.critical { border-left-color: #dc3545; }
-        .vulnerability-card.high { border-left-color: #fd7e14; }
-        .vulnerability-card.medium { border-left-color: #ffc107; }
-        .vulnerability-card.low { border-left-color: #20c997; }
-        .vulnerability-card.info { border-left-color: #0dcaf0; }
-        
-        .stats-card {
-            background: #f8f9fa;
+        .summary-card {
+            background: #23272a;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 8px #000a;
+        }
+        .bundle-section {
+            background: #23272a;
+            border-radius: 10px;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 8px #000a;
+            padding: 1.5rem;
+        }
+        .binary-header {
+            cursor: pointer;
+            background: #181a1b;
             border-radius: 8px;
             padding: 1rem;
+            margin-bottom: 0.5rem;
+            font-family: 'Fira Mono', monospace;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .binary-header:hover {
+            background: #222325;
+        }
+        .severity-badge {
+            border-radius: 6px;
+            padding: 0.3em 0.8em;
+            font-size: 0.95em;
+            font-weight: 700;
+            color: #fff;
+            margin-left: 0.5em;
+        }
+        .severity-critical { background: #c92a2a; }
+        .severity-high { background: #fd7e14; }
+        .severity-medium { background: #fab005; color: #181a1b; }
+        .severity-low { background: #20c997; color: #181a1b; }
+        .severity-info { background: #228be6; }
+        .vuln-card {
+            background: #181a1b;
+            border: 1px solid #23272a;
+            border-radius: 8px;
             margin-bottom: 1rem;
+            padding: 1rem 1.5rem;
+            box-shadow: 0 1px 4px #0006;
         }
-        
-        .chart-container {
-            height: 300px;
-            margin-bottom: 2rem;
+        .vuln-title {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 0.3rem;
         }
+        .vuln-meta {
+            font-size: 0.95em;
+            color: #b0b0b0;
+            margin-bottom: 0.5rem;
+        }
+        .vuln-details {
+            margin-bottom: 0.5rem;
+        }
+        .collapse-arrow {
+            transition: transform 0.2s;
+        }
+        .collapsed .collapse-arrow {
+            transform: rotate(-90deg);
+        }
+        .summary-table th, .summary-table td {
+            color: #e0e0e0;
+            background: #23272a;
+        }
+        .summary-table th {
+            font-weight: 700;
+        }
+        a, a:visited { color: #4dabf7; }
+        a:hover { color: #63e6be; }
     </style>
 </head>
 <body>
-    <div class="container-fluid py-4">
+    <div class="container py-4">
         <h1 class="mb-4">Dylib Hijack Scan Report</h1>
-        
-        <div class="row mb-4">
-            <div class="col-md-6">
-                <div class="stats-card">
+        <div class="summary-card">
+            <div class="row">
+                <div class="col-md-6">
                     <h5>Scan Information</h5>
                     <p><strong>Generated:</strong> {{ timestamp }}</p>
                     <p><strong>System:</strong> {{ system_info }}</p>
                 </div>
-            </div>
-            <div class="col-md-6">
-                <div class="stats-card">
+                <div class="col-md-6">
                     <h5>Summary</h5>
-                    <p><strong>Total Vulnerabilities:</strong> {{ vulnerabilities|length }}</p>
-                    <p><strong>Critical:</strong> {{ vulnerabilities|selectattr('severity.value', 'equalto', 'Critical')|list|length }}</p>
-                    <p><strong>High:</strong> {{ vulnerabilities|selectattr('severity.value', 'equalto', 'High')|list|length }}</p>
-                    <p><strong>Medium:</strong> {{ vulnerabilities|selectattr('severity.value', 'equalto', 'Medium')|list|length }}</p>
-                    <p><strong>Low:</strong> {{ vulnerabilities|selectattr('severity.value', 'equalto', 'Low')|list|length }}</p>
+                    <table class="table summary-table table-sm mb-0">
+                        <tr><th>Total Bundles</th><td>{{ bundles|length }}</td></tr>
+                        <tr><th>Total Binaries</th><td>{{ binaries|length }}</td></tr>
+                        <tr><th>Total Vulnerabilities</th><td>{{ vulnerabilities|length }}</td></tr>
+                        <tr><th>Critical</th><td>{{ vulnerabilities|selectattr('severity', 'equalto', 'Critical')|list|length }}</td></tr>
+                        <tr><th>High</th><td>{{ vulnerabilities|selectattr('severity', 'equalto', 'High')|list|length }}</td></tr>
+                        <tr><th>Medium</th><td>{{ vulnerabilities|selectattr('severity', 'equalto', 'Medium')|list|length }}</td></tr>
+                        <tr><th>Low</th><td>{{ vulnerabilities|selectattr('severity', 'equalto', 'Low')|list|length }}</td></tr>
+                    </table>
                 </div>
             </div>
         </div>
-
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0">Vulnerabilities</h5>
-                    </div>
-                    <div class="card-body">
-                        <table id="vulnerabilities-table" class="table table-striped">
-                            <thead>
-                                <tr>
-                                    <th>Severity</th>
-                                    <th>Binary Path</th>
-                                    <th>Dylib Path</th>
-                                    <th>Description</th>
-                                    <th>Mitigation</th>
-                                    <th>CVE</th>
-                                    <th>Exploit Complexity</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {% for vuln in vulnerabilities %}
-                                <tr>
-                                    <td class="severity-{{ vuln.severity.value|lower }}">{{ vuln.severity.value }}</td>
-                                    <td>{{ vuln.binary_path }}</td>
-                                    <td>{{ vuln.dylib_path }}</td>
-                                    <td>{{ vuln.description }}</td>
-                                    <td>{{ vuln.mitigation }}</td>
-                                    <td>{{ vuln.cve_reference or 'N/A' }}</td>
-                                    <td>{{ vuln.exploit_complexity or 'N/A' }}</td>
-                                </tr>
-                                {% endfor %}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+        {% for bundle, binaries in bundles.items() %}
+        <div class="bundle-section mb-4">
+            <h3 class="mb-3">{{ bundle }}</h3>
+            {% for binary, vulns in binaries.items() %}
+            <div class="binary-header collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index0 }}-{{ loop.parent.loop.index0 }}" aria-expanded="false">
+                <span>{{ binary }}</span>
+                <span>
+                    <span class="severity-badge severity-{{ vulns|map(attribute='severity')|max|lower }}">
+                        {{ vulns|map(attribute='severity')|max }}
+                    </span>
+                    <span class="collapse-arrow">&#9654;</span>
+                </span>
             </div>
-        </div>
-
-        <div class="row">
-            {% for severity in ['Critical', 'High', 'Medium', 'Low', 'Info'] %}
-            <div class="col-12">
-                <h3 class="mb-3">{{ severity }} Severity Issues</h3>
-                {% for vuln in vulnerabilities if vuln.severity.value == severity %}
-                <div class="card vulnerability-card {{ severity|lower }}">
-                    <div class="card-body">
-                        <h5 class="card-title">{{ vuln.binary_path }}</h5>
-                        <h6 class="card-subtitle mb-2 text-muted">{{ vuln.dylib_path }}</h6>
-                        <p class="card-text">{{ vuln.description }}</p>
-                        <div class="mt-3">
-                            <strong>Mitigation:</strong>
-                            <p>{{ vuln.mitigation }}</p>
-                            {% if vuln.cve_reference %}
-                            <strong>CVE Reference:</strong>
-                            <p>{{ vuln.cve_reference }}</p>
-                            {% endif %}
-                            {% if vuln.exploit_complexity %}
-                            <strong>Exploit Complexity:</strong>
-                            <p>{{ vuln.exploit_complexity }}</p>
-                            {% endif %}
-                            {% if vuln.affected_versions %}
-                            <strong>Affected Versions:</strong>
-                            <p>{{ vuln.affected_versions|join(', ') }}</p>
-                            {% endif %}
-                        </div>
-                    </div>
+            <div class="collapse" id="collapse-{{ loop.index0 }}-{{ loop.parent.loop.index0 }}">
+                {% for vuln in vulns %}
+                <div class="vuln-card">
+                    <div class="vuln-title">{{ vuln.vulnerability_type }}</div>
+                    <div class="vuln-meta">Dylib: <span class="text-info">{{ vuln.dylib_path }}</span></div>
+                    <div class="vuln-details">{{ vuln.description }}</div>
+                    <div><strong>Mitigation:</strong> {{ vuln.mitigation }}</div>
+                    {% if vuln.cve_reference %}<div><strong>CVE:</strong> {{ vuln.cve_reference }}</div>{% endif %}
+                    {% if vuln.exploit_complexity %}<div><strong>Exploit Complexity:</strong> {{ vuln.exploit_complexity }}</div>{% endif %}
+                    {% if vuln.affected_versions %}<div><strong>Affected Versions:</strong> {{ vuln.affected_versions|join(', ') }}</div>{% endif %}
                 </div>
                 {% endfor %}
             </div>
             {% endfor %}
         </div>
+        {% endfor %}
     </div>
-
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/datatables@1.10.18/media/js/jquery.dataTables.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        $(document).ready(function() {
-            $('#vulnerabilities-table').DataTable({
-                order: [[0, 'desc']],
-                pageLength: 25,
-                responsive: true
+        // Toggle arrow direction
+        document.querySelectorAll('.binary-header').forEach(function(header) {
+            header.addEventListener('click', function() {
+                header.classList.toggle('collapsed');
             });
         });
     </script>

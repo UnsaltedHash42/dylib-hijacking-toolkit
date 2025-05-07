@@ -20,6 +20,9 @@ from enum import Enum
 import tqdm
 import re
 import shutil
+import time
+from collections import Counter
+from collections import defaultdict
 
 # Initialize colorama
 colorama.init()
@@ -94,53 +97,78 @@ class DylibHijackScanner:
 """
         print(banner)
 
-    def check_binary(self, binary_path: str) -> List[Vulnerability]:
-        """Check a single binary for dylib hijack vulnerabilities."""
-        vulnerabilities = []
-        
+    def _is_restricted(self, binary_path: str) -> bool:
+        """Return True if binary is restricted (hardened runtime, library validation, __RESTRICT, SUID/SGID, or entitlements that block DYLD)."""
         try:
-            # Get binary dependencies with all load commands
+            # Check for __RESTRICT segment
             otool_output = subprocess.check_output(
                 ["otool", "-l", binary_path],
                 universal_newlines=True,
                 stderr=subprocess.DEVNULL
             )
-            
-            # Check for weak dylibs
+            if "__RESTRICT" in otool_output:
+                return True
+            # Check SUID/SGID
+            st = os.stat(binary_path)
+            if bool(st.st_mode & 0o4000) or bool(st.st_mode & 0o2000):
+                return True
+            # Check code signing flags and entitlements
+            cs_info = subprocess.check_output(
+                ["codesign", "-dv", binary_path],
+                universal_newlines=True,
+                stderr=subprocess.DEVNULL
+            )
+            if "runtime" in cs_info or "library-validation" in cs_info or "restrict" in cs_info:
+                return True
+            entitlements = subprocess.check_output(
+                ["codesign", "-d", "--entitlements", ":-", binary_path],
+                universal_newlines=True,
+                stderr=subprocess.DEVNULL
+            )
+            # If the binary has entitlements that block DYLD env vars
+            if "com.apple.security.cs.allow-dyld-environment-variables" not in entitlements and (
+                "com.apple.security.cs.disable-library-validation" not in entitlements and
+                ("com.apple.security.cs.library-validation" in entitlements or "runtime" in cs_info)
+            ):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def check_binary(self, binary_path: str) -> List[Vulnerability]:
+        """Check a single binary for dylib hijack vulnerabilities."""
+        vulnerabilities = []
+        # Only check if not restricted
+        if self._is_restricted(binary_path):
+            return []
+        try:
+            otool_output = subprocess.check_output(
+                ["otool", "-l", binary_path],
+                universal_newlines=True,
+                stderr=subprocess.DEVNULL
+            )
             weak_dylibs = self._check_weak_dylibs(binary_path, otool_output)
             vulnerabilities.extend(weak_dylibs)
-            
-            # Check for rpath hijacking
             rpath_vulns = self._check_rpath_hijacking(binary_path, otool_output)
             vulnerabilities.extend(rpath_vulns)
-            
-            # Check for re-export dylibs
             reexport_vulns = self._check_reexport_dylibs(binary_path, otool_output)
             vulnerabilities.extend(reexport_vulns)
-            
-            # Check for upward dylibs
             upward_vulns = self._check_upward_dylibs(binary_path, otool_output)
             vulnerabilities.extend(upward_vulns)
-            
-            # Check for dlopen hijacking
             dlopen_vulns = self._check_dlopen_hijacking(binary_path, otool_output)
             vulnerabilities.extend(dlopen_vulns)
-            
-            # Check for environment variable hijacking
-            env_var_vulns = self._check_env_var_hijacking(binary_path)
-            vulnerabilities.extend(env_var_vulns)
-            
-            # Check for library validation issues
+            # Only check env var hijacking if not a dylib file
+            if not binary_path.endswith('.dylib'):
+                env_var_vulns = self._check_env_var_hijacking(binary_path)
+                vulnerabilities.extend(env_var_vulns)
             lib_val_vulns = self._check_library_validation(binary_path)
             vulnerabilities.extend(lib_val_vulns)
-            
         except subprocess.CalledProcessError as e:
             if self.verbose:
                 logging.error(f"Error checking binary {binary_path}: {e}")
         except Exception as e:
             if self.verbose:
                 logging.error(f"Unexpected error checking binary {binary_path}: {e}")
-            
         return vulnerabilities
 
     def _check_weak_dylibs(self, binary_path: str, otool_output: str) -> List[Vulnerability]:
@@ -522,8 +550,9 @@ class DylibHijackScanner:
 
         print(f"{Fore.GREEN}Found {len(binaries)} potential binaries to scan{Style.RESET_ALL}")
         
-        # Scan binaries with progress bar
-        with tqdm.tqdm(total=len(binaries), desc="Scanning binaries", unit="file") as pbar:
+        start_time = time.time()
+        # Scan binaries with progress bar (show ETA)
+        with tqdm.tqdm(total=len(binaries), desc="Scanning binaries", unit="file", dynamic_ncols=True, leave=True, bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_to_binary = {executor.submit(self.check_binary, binary): binary 
                                   for binary in binaries}
@@ -537,6 +566,26 @@ class DylibHijackScanner:
                         if self.verbose:
                             logging.error(f"Error processing {binary}: {e}")
                     pbar.update(1)
+        end_time = time.time()
+        self._print_terminal_summary(start_time, end_time)
+
+    def _print_terminal_summary(self, start_time, end_time):
+        """Print a color-coded summary table to the terminal after scan."""
+        total = len(self.vulnerabilities)
+        counts = Counter([v.severity for v in self.vulnerabilities])
+        for sev in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW, Severity.INFO]:
+            color = {
+                Severity.CRITICAL: Fore.RED,
+                Severity.HIGH: Fore.LIGHTRED_EX,
+                Severity.MEDIUM: Fore.YELLOW,
+                Severity.LOW: Fore.GREEN,
+                Severity.INFO: Fore.CYAN
+            }[sev]
+            count = counts.get(sev, 0)
+            if count > 0:
+                print(f"{color}{sev.value:<10}: {count}{Style.RESET_ALL}")
+        print(f"{Fore.MAGENTA}Total vulnerabilities: {total}{Style.RESET_ALL}")
+        print(f"{Fore.BLUE}Scan time: {end_time - start_time:.2f} seconds{Style.RESET_ALL}\n")
 
     def _is_binary(self, file_path: Path) -> bool:
         """Check if a file is a binary executable."""
@@ -559,41 +608,56 @@ class DylibHijackScanner:
             return False
 
     def generate_reports(self):
-        """Generate various report formats."""
+        """Generate various report formats, only for vulnerable binaries."""
+        # Only keep vulnerabilities for binaries that have at least one vuln
         if not self.vulnerabilities:
             print(f"{Fore.YELLOW}No vulnerabilities found to report{Style.RESET_ALL}")
             return
-
+        # Filter to only binaries with at least one vuln
+        vuln_binaries = set(v.binary_path for v in self.vulnerabilities)
+        self.vulnerabilities = [v for v in self.vulnerabilities if v.binary_path in vuln_binaries]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
         print(f"{Fore.GREEN}Generating reports...{Style.RESET_ALL}")
-        
-        # Generate HTML report
         self._generate_html_report(timestamp)
-        
-        # Generate CSV report
         self._generate_csv_report(timestamp)
-        
-        # Generate JSON report
         self._generate_json_report(timestamp)
-        
-        # Generate Markdown report
         self._generate_markdown_report(timestamp)
-        
-        # Generate exploitation commands
+        self._generate_text_report(timestamp)
+        self._generate_grepable_report(timestamp)
         self._generate_exploitation_commands(timestamp)
 
     def _generate_html_report(self, timestamp: str):
-        """Generate an HTML report with interactive elements."""
+        """Generate an HTML report with modern dark mode, grouped by bundle and binary."""
         template = self.template_env.get_template('report_template.html')
         report_path = self.output_dir / f"dylib_scan_report_{timestamp}.html"
-        
+
+        # Group vulnerabilities by bundle and binary
+        bundles = defaultdict(lambda: defaultdict(list))
+        binaries_set = set()
+        for vuln in self.vulnerabilities:
+            bundle = self._get_bundle_path(vuln.binary_path)
+            bundles[bundle][vuln.binary_path].append(vuln)
+            binaries_set.add(vuln.binary_path)
+
+        # For summary
+        binaries = list(binaries_set)
+
         with open(report_path, 'w') as f:
             f.write(template.render(
                 vulnerabilities=self.vulnerabilities,
+                bundles=bundles,
+                binaries=binaries,
                 timestamp=timestamp,
                 system_info=platform.platform()
             ))
+
+    def _get_bundle_path(self, binary_path: str) -> str:
+        """Find the .app bundle root for a binary, or use the binary's parent directory."""
+        parts = Path(binary_path).parts
+        for i in range(len(parts)-1, -1, -1):
+            if parts[i].endswith('.app'):
+                return str(Path(*parts[:i+1]))
+        return str(Path(binary_path).parent)
 
     def _generate_csv_report(self, timestamp: str):
         """Generate a CSV report."""
@@ -676,6 +740,71 @@ class DylibHijackScanner:
                     f.write(f"# Type: {vuln.vulnerability_type.value}\n")
                     f.write(f"# Severity: {vuln.severity.value}\n")
                     f.write(f"{vuln.exploitation_command}\n\n")
+        # Notify user
+        self._print_terminal_message(f"Exploitation commands saved to {report_path}")
+
+    def _generate_text_report(self, timestamp: str):
+        """Generate a plain text report that is terminal-friendly and readable."""
+        report_path = self.output_dir / f"dylib_scan_report_{timestamp}.txt"
+        
+        # Group vulnerabilities by bundle and binary
+        bundles = {}
+        for vuln in self.vulnerabilities:
+            bundle = self._get_bundle_path(vuln.binary_path)
+            bundles.setdefault(bundle, {})
+            bundles[bundle].setdefault(vuln.binary_path, []).append(vuln)
+        
+        with open(report_path, 'w') as f:
+            f.write("=== Dylib Hijack Scan Report ===\n")
+            f.write(f"Generated: {timestamp}\n")
+            f.write(f"System: {platform.platform()}\n\n")
+            # Summary
+            total_vulns = len(self.vulnerabilities)
+            counts = Counter([v.severity.value for v in self.vulnerabilities])
+            f.write("--- Summary ---\n")
+            f.write(f"Total Bundles: {len(bundles)}\n")
+            f.write(f"Total Binaries: {len(set(v.binary_path for v in self.vulnerabilities))}\n")
+            f.write(f"Total Vulnerabilities: {total_vulns}\n")
+            for sev in ['Critical','High','Medium','Low','Info']:
+                if counts.get(sev, 0):
+                    f.write(f"{sev}: {counts[sev]}\n")
+            f.write("\n")
+            # Details
+            for bundle, bins in bundles.items():
+                f.write(f"Bundle: {bundle}\n")
+                for binary, vulns in bins.items():
+                    top = max(v.severity.value for v in vulns)
+                    f.write(f"  Binary: {binary} (Highest: {top})\n")
+                    for i, v in enumerate(vulns,1):
+                        f.write(f"    [{i}] {v.vulnerability_type.value} - {v.severity.value}\n")
+                        f.write(f"        Dylib: {v.dylib_path}\n")
+                        f.write(f"        Desc: {v.description}\n")
+                        f.write(f"        Mitigation: {v.mitigation}\n")
+                        if v.exploit_complexity: f.write(f"        Exploit Complexity: {v.exploit_complexity}\n")
+                        if v.cve_reference: f.write(f"        CVE: {v.cve_reference}\n")
+                f.write("\n")
+        self._print_terminal_message(f"Text report saved to {report_path}")
+
+    def _generate_grepable_report(self, timestamp: str):
+        """Generate a grepable report: one vulnerability per line, tab-separated."""
+        report_path = self.output_dir / f"dylib_scan_report_{timestamp}.grep"
+        with open(report_path, 'w') as f:
+            f.write("Bundle\tBinary\tSeverity\tType\tDylib\tDescription\tMitigation\tExploit_Complexity\tCVE\n")
+            for v in self.vulnerabilities:
+                bundle = self._get_bundle_path(v.binary_path)
+                fields = [
+                    bundle, v.binary_path, v.severity.value, v.vulnerability_type.value,
+                    v.dylib_path,
+                    v.description.replace('\t',' ').replace('\n',' '),
+                    v.mitigation.replace('\t',' ').replace('\n',' '),
+                    v.exploit_complexity or 'N/A', v.cve_reference or 'N/A'
+                ]
+                f.write("\t".join(fields)+"\n")
+        self._print_terminal_message(f"Grepable report saved to {report_path}")
+
+    def _print_terminal_message(self, message: str):
+        """Print a colorized message to the terminal."""
+        print(f"{Fore.GREEN}{message}{Style.RESET_ALL}")
 
 def main():
     parser = argparse.ArgumentParser(
