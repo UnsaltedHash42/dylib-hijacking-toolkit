@@ -172,71 +172,64 @@ class DylibHijackScanner:
                 logging.error(f"Unexpected error checking binary {binary_path}: {e}")
         return vulnerabilities
 
+    def _is_writable_and_not_sip(self, path: str) -> bool:
+        """Return True if the path is writable by the current user and not SIP-protected."""
+        if not os.path.exists(path):
+            # If the parent directory is writable, attacker can create the file
+            parent = os.path.dirname(path)
+            if not os.path.isdir(parent):
+                return False
+            if not os.access(parent, os.W_OK):
+                return False
+            # Check SIP
+            if any(sip in parent for sip in [
+                '/System/Library', '/usr/lib', '/usr/local/lib', '/opt/homebrew/lib']):
+                return False
+            return True
+        # If the file exists, check if it is writable and not SIP-protected
+        if not os.access(path, os.W_OK):
+            return False
+        if any(sip in path for sip in [
+            '/System/Library', '/usr/lib', '/usr/local/lib', '/opt/homebrew/lib']):
+            return False
+        return True
+
+    def _resolve_special_path(self, path: str, binary_path: str) -> str:
+        """Resolve @rpath, @loader_path, @executable_path to absolute paths if possible."""
+        if path.startswith('@loader_path'):
+            return os.path.abspath(os.path.join(os.path.dirname(binary_path), path.replace('@loader_path', '').lstrip('/')))
+        elif path.startswith('@executable_path'):
+            # Try to find the main executable path
+            return os.path.abspath(os.path.join(os.path.dirname(binary_path), path.replace('@executable_path', '').lstrip('/')))
+        elif path.startswith('@rpath'):
+            # Try to resolve @rpath using LC_RPATH entries
+            # Fallback: treat as unresolved
+            return None
+        else:
+            return path
+
     def _check_weak_dylibs(self, binary_path: str, otool_output: str) -> List[Vulnerability]:
-        """Check for weak dylib vulnerabilities."""
+        """Check for weak dylib vulnerabilities, only if path is writable and not SIP-protected."""
         vulnerabilities = []
-        
-        # Extract LC_LOAD_WEAK_DYLIB commands with version info
         weak_dylibs = re.findall(r'LC_LOAD_WEAK_DYLIB.*?name (.*?) \(.*?current version (.*?)\n.*?compatibility version (.*?)\n', otool_output)
-        
         for dylib, current_version, compat_version in weak_dylibs:
-            if not dylib.startswith('@'):
-                # Check if path is writable
-                dylib_path = os.path.expanduser(dylib)
-                is_writable = os.access(os.path.dirname(dylib_path), os.W_OK)
-                
-                # Check if path is SIP protected
-                is_sip_protected = any(protected_path in dylib_path for protected_path in [
-                    '/System/Library',
-                    '/usr/lib',
-                    '/usr/local/lib',
-                    '/opt/homebrew/lib'
-                ])
-                
-                # Check if dylib exists and get its version
-                dylib_exists = os.path.exists(dylib_path)
-                dylib_version = None
-                if dylib_exists:
-                    try:
-                        dylib_otool = subprocess.check_output(
-                            ["otool", "-l", dylib_path],
-                            universal_newlines=True,
-                            stderr=subprocess.DEVNULL
-                        )
-                        version_match = re.search(r'current version (.*?)\n', dylib_otool)
-                        if version_match:
-                            dylib_version = version_match.group(1)
-                    except subprocess.CalledProcessError:
-                        pass
-                
-                # Determine severity based on conditions
-                severity = Severity.HIGH
-                if is_sip_protected:
-                    severity = Severity.LOW
-                elif not is_writable:
-                    severity = Severity.MEDIUM
-                
-                vuln = Vulnerability(
-                    binary_path=binary_path,
-                    dylib_path=dylib,
-                    severity=severity,
-                    vulnerability_type=VulnerabilityType.WEAK_DYLIB,
-                    description=f"Missing weak dylib: {dylib} (Current version: {current_version}, Compat version: {compat_version})",
-                    mitigation="Implement proper dylib loading restrictions and code signing",
-                    why_exploitable="The binary loads a weak dylib that is missing or writable in an unprotected location, allowing an attacker to place a malicious dylib that will be loaded at runtime.",
-                    exploit_complexity="Medium" if is_writable else "High",
-                    affected_versions=[platform.mac_ver()[0]],
-                    amfi_flags={
-                        "is_writable": is_writable,
-                        "is_sip_protected": is_sip_protected,
-                        "dylib_exists": dylib_exists,
-                        "dylib_version": dylib_version,
-                        "required_version": current_version,
-                        "compat_version": compat_version
-                    }
-                )
-                vulnerabilities.append(vuln)
-        
+            resolved = self._resolve_special_path(dylib, binary_path)
+            if not resolved:
+                continue
+            if not self._is_writable_and_not_sip(resolved):
+                continue
+            vuln = Vulnerability(
+                binary_path=binary_path,
+                dylib_path=resolved,
+                severity=Severity.HIGH,
+                vulnerability_type=VulnerabilityType.WEAK_DYLIB,
+                description=f"Weak dylib {resolved} is missing or writable. Place a malicious dylib at this path to hijack execution.",
+                mitigation="Restrict writable locations and use code signing.",
+                why_exploitable=f"Attacker can place a malicious dylib at {resolved} because it is writable and not SIP-protected.",
+                exploit_complexity="Medium",
+                affected_versions=[platform.mac_ver()[0]]
+            )
+            vulnerabilities.append(vuln)
         return vulnerabilities
 
     def _check_rpath_hijacking(self, binary_path: str, otool_output: str) -> List[Vulnerability]:
