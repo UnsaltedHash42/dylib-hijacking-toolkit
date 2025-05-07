@@ -616,7 +616,7 @@ main() {
     echo -e "${GREEN}[+] Summary report: ${SUMMARY_LOG}${NC}" | tee -a "$CONSOLE_LOG"
     echo -e "${GREEN}[+] Detailed report: ${MASTER_LOG}${NC}" | tee -a "$CONSOLE_LOG"
     
-    # Create a formatted vulnerability target list if any vulnerabilities found
+        # Create a formatted vulnerability target list if any vulnerabilities found
     if [ $total_vuln_count -gt 0 ]; then
         TARGET_LIST="${OUTPUT_DIR}/high_value_targets.txt"
         echo "# High-Value Exploitation Targets" > "$TARGET_LIST"
@@ -626,20 +626,26 @@ main() {
         
         if [ $weak_vuln_count -gt 0 ]; then
             echo "## Weak Dylib Targets" >> "$TARGET_LIST"
-            grep -v "^#" "$WEAK_DYLIBS_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
+            grep -v "^#" "$WEAK_DYLIBS_LOG" \
+                | sort -u \
+                | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' \
+                >> "$TARGET_LIST"
             echo "" >> "$TARGET_LIST"
         fi
         
         if [ $rpath_vuln_count -gt 0 ]; then
             echo "## RPATH Hijacking Targets" >> "$TARGET_LIST"
-            grep -v "^#" "$RPATH_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
+            grep -v "^#" "$RPATH_LOG" \
+                | sort -u \
+                | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' \
+                >> "$TARGET_LIST"
             echo "" >> "$TARGET_LIST"
         fi
         
-                if [ $envvar_vuln_count -gt 0 ]; then
+        if [ $envvar_vuln_count -gt 0 ]; then
             echo "## Environment Variable Hijacking Targets" >> "$TARGET_LIST"
             grep -v "^#" "$ENV_VAR_LOG" \
-                | sort | uniq \
+                | sort -u \
                 | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' \
                 >> "$TARGET_LIST"
             echo "" >> "$TARGET_LIST"
@@ -652,7 +658,7 @@ main() {
             echo "" >> "$EXPLOITS_FILE"
             
             grep -v "^#" "$ENV_VAR_LOG" \
-                | sort | uniq \
+                | sort -u \
                 | awk -F'|' '{printf "DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib %s\n", $1}' \
                 >> "$EXPLOITS_FILE"
             
@@ -662,13 +668,10 @@ main() {
         echo -e "${GREEN}[+] High-value targets list: ${TARGET_LIST}${NC}" | tee -a "$CONSOLE_LOG"
     fi
 
-        
-        echo -e "${GREEN}[+] High-value targets list: ${TARGET_LIST}${NC}" | tee -a "$CONSOLE_LOG"
-    fi
-    
     # Cleanup
     rm -rf "$TEMP_DIR"
 }
+
 
 # Run the main function
 main
