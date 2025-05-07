@@ -507,10 +507,11 @@ main() {
         echo -e "${BLUE}Analyzing: ${binary}${NC}" | tee -a "$CONSOLE_LOG"
         
         # Check for different vulnerability types
-        weak_vulnerable=$(check_weak_dylibs "$binary")
-        rpath_vulnerable=$(check_rpath_deps "$binary")
-        libval_vulnerable=$(check_code_signing "$binary")
-        envvar_vulnerable=$(check_env_var_hijacking "$binary")
+        weak_vulnerable=$(check_weak_dylibs    "$binary" | tail -n1)
+        rpath_vulnerable=$(check_rpath_deps    "$binary" | tail -n1)
+        libval_vulnerable=$(check_code_signing "$binary" | tail -n1)
+        envvar_vulnerable=$(check_env_var_hijacking "$binary" | tail -n1)
+
         
         # Debug output
         echo "Debug - weak_vulnerable: $weak_vulnerable" >> "$MASTER_LOG"
