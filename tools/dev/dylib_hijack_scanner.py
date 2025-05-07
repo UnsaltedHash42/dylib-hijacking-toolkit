@@ -622,8 +622,17 @@ class DylibHijackScanner:
         """Generate a JSON report."""
         report_path = self.output_dir / f"dylib_scan_report_{timestamp}.json"
         
+        # Convert vulnerabilities to JSON-serializable format
+        serializable_vulns = []
+        for vuln in self.vulnerabilities:
+            vuln_dict = vars(vuln).copy()
+            # Convert Enum values to strings
+            vuln_dict['severity'] = vuln_dict['severity'].value
+            vuln_dict['vulnerability_type'] = vuln_dict['vulnerability_type'].value
+            serializable_vulns.append(vuln_dict)
+        
         with open(report_path, 'w') as f:
-            json.dump([vars(vuln) for vuln in self.vulnerabilities], f, indent=2)
+            json.dump(serializable_vulns, f, indent=2)
 
     def _generate_markdown_report(self, timestamp: str):
         """Generate a Markdown report."""
