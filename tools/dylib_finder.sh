@@ -7,6 +7,7 @@
 # 1. Binaries with LC_LOAD_WEAK_DYLIB that could be hijacked
 # 2. Binaries with @rpath dependencies where search order can be exploited
 # 3. Code signing restrictions that may prevent exploitation
+# 4. Environment variable (DYLD_INSERT_LIBRARIES) hijacking vulnerabilities
 #
 
 # Color definitions
@@ -49,6 +50,7 @@ SUMMARY_LOG="${OUTPUT_DIR}/summary_report.txt"
 WEAK_DYLIBS_LOG="${OUTPUT_DIR}/weak_dylibs_vulnerabilities.txt"
 RPATH_LOG="${OUTPUT_DIR}/rpath_vulnerabilities.txt"
 LIBRARY_VALIDATION_LOG="${OUTPUT_DIR}/library_validation_vulnerabilities.txt"
+ENV_VAR_LOG="${OUTPUT_DIR}/environment_variable_vulnerabilities.txt"
 EXECUTABLE_LIST="${OUTPUT_DIR}/scanned_executables.txt"
 CONSOLE_LOG="${OUTPUT_DIR}/console_output.txt"
 
@@ -307,6 +309,18 @@ check_rpath_deps() {
     echo "$vulnerable"
 }
 
+# Function to check for __RESTRICT segment
+check_restrict_segment() {
+    local binary="$1"
+    
+    # Check for __RESTRICT segment
+    if otool -l "$binary" 2>/dev/null | grep -q "__RESTRICT"; then
+        return 0  # Has restrict segment
+    else
+        return 1  # No restrict segment
+    fi
+}
+
 # Function to check code signing restrictions
 check_code_signing() {
     local binary="$1"
@@ -321,6 +335,7 @@ check_code_signing() {
     local has_hardened_runtime=false
     local has_library_validation=false
     local has_disable_lib_validation=false
+    local lib_validation_vulnerable=false
     
     if echo "$cs_info" | grep -q "runtime"; then
         echo -e "${RED}    [-] Has hardened runtime${NC}" | tee -a "$CONSOLE_LOG"
@@ -340,9 +355,7 @@ check_code_signing() {
         
         # Add to library validation vulnerability log
         echo "$binary|MISSING_LIBRARY_VALIDATION" >> "$LIBRARY_VALIDATION_LOG"
-        
-        echo "true"
-        return
+        lib_validation_vulnerable=true
     fi
     
     # Check entitlements
@@ -355,11 +368,62 @@ check_code_signing() {
         echo "$binary|DISABLED_LIBRARY_VALIDATION" >> "$LIBRARY_VALIDATION_LOG"
         
         has_disable_lib_validation=true
-        echo "true"
+        lib_validation_vulnerable=true
+    fi
+    
+    echo "$lib_validation_vulnerable"
+}
+
+# Function to check if binary is vulnerable to environment variable-based hijacking
+check_env_var_hijacking() {
+    local binary="$1"
+    local binary_name=$(basename "$binary")
+    
+    echo -e "${GREEN}[+] Checking for environment variable hijacking vulnerability in ${binary_name}${NC}" | tee -a "$CONSOLE_LOG"
+    
+    echo -e "\n==== Environment Variable Hijacking Analysis for $binary ====" >> "$MASTER_LOG"
+    
+    # Check for __RESTRICT segment
+    if check_restrict_segment "$binary"; then
+        echo -e "${RED}    [-] Has __RESTRICT segment - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
+        echo "  - Has __RESTRICT segment - protected from environment variable hijacking" >> "$MASTER_LOG"
+        echo "false"
+        return
+    else
+        echo -e "    No __RESTRICT segment found" | tee -a "$CONSOLE_LOG"
+        echo "  - No __RESTRICT segment found" >> "$MASTER_LOG"
+    fi
+    
+    # Check code signing flags
+    local cs_info=$(codesign -dv "$binary" 2>&1)
+    
+    # Check for CS_RESTRICT flag (prevents env var hijacking)
+    if echo "$cs_info" | grep -q "restrict"; then
+        echo -e "${RED}    [-] Has CS_RESTRICT flag - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
+        echo "  - Has CS_RESTRICT flag - protected from environment variable hijacking" >> "$MASTER_LOG"
+        echo "false"
         return
     fi
     
-    echo "false"
+    # Check setuid/setgid bits
+    if [ -u "$binary" ] || [ -g "$binary" ]; then
+        echo -e "${RED}    [-] Has setuid/setgid bits - protected from environment variable hijacking${NC}" | tee -a "$CONSOLE_LOG"
+        echo "  - Has setuid/setgid bits - protected from environment variable hijacking" >> "$MASTER_LOG"
+        echo "false"
+        return
+    fi
+    
+    # If we get here, the binary is likely vulnerable to environment variable hijacking
+    echo -e "${YELLOW}    [!] Vulnerable to environment variable hijacking (DYLD_INSERT_LIBRARIES)${NC}" | tee -a "$CONSOLE_LOG"
+    echo "  - VULNERABLE: Can be exploited with DYLD_INSERT_LIBRARIES" >> "$MASTER_LOG"
+    
+    # Add to environment variable vulnerability log
+    echo "$binary|DYLD_INSERT_LIBRARIES|ENV_VAR_HIJACKING" >> "$ENV_VAR_LOG"
+    
+    # Add example exploitation command to the log
+    echo -e "  - Example exploitation: DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib $binary" >> "$MASTER_LOG"
+    
+    echo "true"
 }
 
 # Main function
@@ -385,6 +449,10 @@ main() {
     echo "# Format: binary_path|vulnerability_type" >> "$LIBRARY_VALIDATION_LOG"
     echo "" >> "$LIBRARY_VALIDATION_LOG"
     
+    echo "# Vulnerable Binaries - Environment Variable Hijacking" > "$ENV_VAR_LOG"
+    echo "# Format: binary_path|environment_variable|vulnerability_type" >> "$ENV_VAR_LOG"
+    echo "" >> "$ENV_VAR_LOG"
+    
     echo "# List of All Scanned Executables" > "$EXECUTABLE_LIST"
     echo "" >> "$EXECUTABLE_LIST"
     
@@ -404,6 +472,7 @@ main() {
     weak_vuln_count=0
     rpath_vuln_count=0
     libval_vuln_count=0
+    envvar_vuln_count=0
     total_vuln_count=0
     total_binaries=0
     
@@ -424,6 +493,7 @@ main() {
         weak_vulnerable=$(check_weak_dylibs "$binary")
         rpath_vulnerable=$(check_rpath_deps "$binary")
         libval_vulnerable=$(check_code_signing "$binary")
+        envvar_vulnerable=$(check_env_var_hijacking "$binary")
         
         # Count vulnerabilities for this binary
         binary_vulnerable=false
@@ -443,6 +513,11 @@ main() {
             binary_vulnerable=true
         fi
         
+        if [ "$envvar_vulnerable" = "true" ]; then
+            envvar_vuln_count=$((envvar_vuln_count + 1))
+            binary_vulnerable=true
+        fi
+        
         if [ "$binary_vulnerable" = "true" ]; then
             total_vuln_count=$((total_vuln_count + 1))
         fi
@@ -458,6 +533,7 @@ main() {
     echo -e "${GREEN}[+] Weak dylib vulnerabilities: ${weak_vuln_count}${NC}" | tee -a "$CONSOLE_LOG"
     echo -e "${GREEN}[+] RPATH ordering vulnerabilities: ${rpath_vuln_count}${NC}" | tee -a "$CONSOLE_LOG"
     echo -e "${GREEN}[+] Library validation vulnerabilities: ${libval_vuln_count}${NC}" | tee -a "$CONSOLE_LOG"
+    echo -e "${GREEN}[+] Environment variable hijacking vulnerabilities: ${envvar_vuln_count}${NC}" | tee -a "$CONSOLE_LOG"
     
     # Create summary report
     echo "Dylib Hijacking Vulnerability Scan Summary" > "$SUMMARY_LOG"
@@ -472,6 +548,7 @@ main() {
     echo "Weak dylib vulnerabilities: ${weak_vuln_count}" >> "$SUMMARY_LOG"
     echo "RPATH ordering vulnerabilities: ${rpath_vuln_count}" >> "$SUMMARY_LOG"
     echo "Library validation vulnerabilities: ${libval_vuln_count}" >> "$SUMMARY_LOG"
+    echo "Environment variable hijacking vulnerabilities: ${envvar_vuln_count}" >> "$SUMMARY_LOG"
     echo "" >> "$SUMMARY_LOG"
     
     # Add vulnerability details if any found
@@ -493,6 +570,13 @@ main() {
         echo "LIBRARY VALIDATION VULNERABILITIES:" >> "$SUMMARY_LOG"
         echo "These binaries have missing or disabled library validation:" >> "$SUMMARY_LOG"
         grep -v "^#" "$LIBRARY_VALIDATION_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
+        echo "" >> "$SUMMARY_LOG"
+    fi
+    
+    if [ $envvar_vuln_count -gt 0 ]; then
+        echo "ENVIRONMENT VARIABLE HIJACKING VULNERABILITIES:" >> "$SUMMARY_LOG"
+        echo "These binaries can be exploited with DYLD_INSERT_LIBRARIES:" >> "$SUMMARY_LOG"
+        grep -v "^#" "$ENV_VAR_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
         echo "" >> "$SUMMARY_LOG"
     fi
     
@@ -522,6 +606,23 @@ main() {
             echo "## RPATH Hijacking Targets" >> "$TARGET_LIST"
             grep -v "^#" "$RPATH_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
             echo "" >> "$TARGET_LIST"
+        fi
+        
+        if [ $envvar_vuln_count -gt 0 ]; then
+            echo "## Environment Variable Hijacking Targets" >> "$TARGET_LIST"
+            grep -v "^#" "$ENV_VAR_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
+            echo "" >> "$TARGET_LIST"
+            
+            # Generate quick exploitation commands
+            EXPLOITS_FILE="${OUTPUT_DIR}/exploitation_commands.txt"
+            echo "# Quick Exploitation Commands for Environment Variable Hijacking" > "$EXPLOITS_FILE"
+            echo "# =======================================================" >> "$EXPLOITS_FILE"
+            echo "# Use these commands to test DYLD_INSERT_LIBRARIES hijacking with the basic_injection.dylib template" >> "$EXPLOITS_FILE"
+            echo "" >> "$EXPLOITS_FILE"
+            
+            grep -v "^#" "$ENV_VAR_LOG" | sort | uniq | awk -F'|' '{printf "DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib %s\n", $1}' >> "$EXPLOITS_FILE"
+            
+            echo -e "${GREEN}[+] Exploitation commands: ${EXPLOITS_FILE}${NC}" | tee -a "$CONSOLE_LOG"
         fi
         
         echo -e "${GREEN}[+] High-value targets list: ${TARGET_LIST}${NC}" | tee -a "$CONSOLE_LOG"
