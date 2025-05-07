@@ -10,7 +10,7 @@
 // Usage:
 // DYLD_INSERT_LIBRARIES=./injection.dylib /path/to/target/application
 //
-
+#include <stdarg.h> 
 #include <stdio.h>
 #include <stdlib.h>
 #include <syslog.h>
