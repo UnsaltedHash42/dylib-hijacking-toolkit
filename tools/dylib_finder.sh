@@ -74,6 +74,24 @@ check_weak_dylibs() {
     rm "${TEMP_DIR}/${binary_name}_weak.txt" 2>/dev/null
 }
 
+# Function to resolve application directory path
+resolve_app_dir() {
+    local dir="$1"
+    local app_dir="$dir"
+    
+    # Walk up the directory tree until we find a .app directory or reach root
+    while [[ ! "$app_dir" == *".app"* && "$app_dir" != "/" ]]; do
+        app_dir=$(dirname "$app_dir")
+    done
+    
+    # If we reached root without finding a .app directory, return the original path
+    if [[ "$app_dir" == "/" ]]; then
+        echo "$dir"
+    else
+        echo "$app_dir"
+    fi
+}
+
 # Function to check for @rpath dependencies
 check_rpath_deps() {
     local binary="$1"
@@ -112,13 +130,15 @@ check_rpath_deps() {
                     echo -e "    ${rpath} -> ${resolved_path}"
                     echo "  - ${rpath} -> ${resolved_path}" >> "$RPATH_DEPS_FILE"
                 elif [[ "$rpath" == @executable_path* ]]; then
-                    app_dir=$(dirname "$binary")
+                    bin_dir=$(dirname "$binary")
+                    app_dir=$(resolve_app_dir "$bin_dir")
                     resolved_path="${rpath/@executable_path/$app_dir}"
                     echo -e "    ${rpath} -> ${resolved_path}"
                     echo "  - ${rpath} -> ${resolved_path}" >> "$RPATH_DEPS_FILE"
                 else
                     echo -e "    ${rpath}"
                     echo "  - ${rpath}" >> "$RPATH_DEPS_FILE"
+                    resolved_path="$rpath"
                 fi
                 
                 # Check if this is the first path in the search order
@@ -277,9 +297,4 @@ main() {
 }
 
 # Run the main function
-main "$binary")
-                    while [[ ! "$app_dir" == *".app"* && "$app_dir" != "/" ]]; do
-                        app_dir=$(dirname "$app_dir")
-                    done
-                    if [[ "$app_dir" == "/" ]]; then
-                        app_dir=$(dirname
+main
