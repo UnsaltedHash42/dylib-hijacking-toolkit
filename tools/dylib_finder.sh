@@ -30,6 +30,12 @@ else
     echo -e "${GREEN}[+] Scanning directory: ${SCAN_DIR}${NC}"
 fi
 
+# Check if directory exists
+if [ ! -d "$SCAN_DIR" ]; then
+    echo -e "${RED}[!] Directory does not exist: ${SCAN_DIR}${NC}"
+    exit 1
+fi
+
 # Timestamp for log files
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
@@ -48,19 +54,102 @@ CONSOLE_LOG="${OUTPUT_DIR}/console_output.txt"
 
 # Create temporary directory for results
 TEMP_DIR=$(mktemp -d)
+MACHO_LIST="${TEMP_DIR}/macho_list.txt"
 
 # Function to find all Mach-O binaries in a directory
 find_macho_files() {
     echo -e "${GREEN}[+] Finding Mach-O files in ${SCAN_DIR}...${NC}" | tee -a "$CONSOLE_LOG"
     
-    # Create a file to store the list of binaries
-    MACHO_LIST="${TEMP_DIR}/macho_list.txt"
+    # Initialize macOS-compatible find command that will correctly handle spaces and special characters
+    # Search for executable binaries and common dylib patterns first
+    find "$SCAN_DIR" -type f \( -name "*.dylib" -o -name "*.bundle" -o -path "*/MacOS/*" \) 2>/dev/null > "$MACHO_LIST"
     
-    # Use find to locate Mach-O binaries and store them in the file
-    find "$SCAN_DIR" -type f -not -path "*/\.*" -exec file {} \; | grep "Mach-O" | cut -d':' -f1 > "$MACHO_LIST"
+    # Create a temporary file to store additional Mach-O files
+    TEMP_MACHO="${TEMP_DIR}/temp_macho.txt"
+    > "$TEMP_MACHO"
     
-    # Return the file path containing the list
-    echo "$MACHO_LIST"
+    # Process each found file to verify it's a Mach-O
+    local total_found=0
+    while IFS= read -r file; do
+        if [ -f "$file" ]; then
+            file_type=$(file "$file" 2>/dev/null)
+            if [[ "$file_type" == *"Mach-O"* ]]; then
+                echo "$file" >> "$TEMP_MACHO"
+                total_found=$((total_found + 1))
+            fi
+        fi
+    done < "$MACHO_LIST"
+    
+    # Replace the original list with verified Mach-O files
+    mv "$TEMP_MACHO" "$MACHO_LIST"
+    
+    # If we found fewer than 5 Mach-O files, use a more aggressive but slower search
+    if [ "$total_found" -lt 5 ]; then
+        echo -e "${YELLOW}[!] Few Mach-O files found, using deeper search...${NC}" | tee -a "$CONSOLE_LOG"
+        TEMP_DEEP="${TEMP_DIR}/deep_macho.txt"
+        
+        # Find all files first
+        find "$SCAN_DIR" -type f -not -path "*/\.*" -not -path "*/Resources/*.png" -not -path "*/Resources/*.jpg" 2>/dev/null | while IFS= read -r file; do
+            if [ -f "$file" ]; then
+                file_type=$(file "$file" 2>/dev/null)
+                if [[ "$file_type" == *"Mach-O"* ]]; then
+                    echo "$file" >> "$TEMP_DEEP"
+                fi
+            fi
+        done
+        
+        # Append unique results to our main list
+        if [ -f "$TEMP_DEEP" ]; then
+            sort "$TEMP_DEEP" | uniq > "${TEMP_DIR}/unique_deep.txt"
+            cat "${TEMP_DIR}/unique_deep.txt" >> "$MACHO_LIST"
+            sort "$MACHO_LIST" | uniq > "${TEMP_DIR}/final_list.txt"
+            mv "${TEMP_DIR}/final_list.txt" "$MACHO_LIST"
+        fi
+    fi
+    
+    # Get the final count
+    local binary_count=$(wc -l < "$MACHO_LIST" | xargs)
+    
+    # Check if we found any Mach-O files
+    if [ "$binary_count" -eq 0 ]; then
+        # Last resort - try the most aggressive search for specific app structure
+        echo -e "${YELLOW}[!] No Mach-O files found yet, trying last resort search...${NC}" | tee -a "$CONSOLE_LOG"
+        
+        # Check if we're scanning an .app bundle and look for its executable
+        if [[ "$SCAN_DIR" == *".app"* ]]; then
+            APP_NAME=$(basename "$SCAN_DIR" .app)
+            APP_MACOS_DIR="${SCAN_DIR}/Contents/MacOS"
+            
+            if [ -d "$APP_MACOS_DIR" ]; then
+                # Look for executable with same name as the app
+                if [ -f "${APP_MACOS_DIR}/${APP_NAME}" ]; then
+                    file_type=$(file "${APP_MACOS_DIR}/${APP_NAME}" 2>/dev/null)
+                    if [[ "$file_type" == *"Mach-O"* ]]; then
+                        echo "${APP_MACOS_DIR}/${APP_NAME}" >> "$MACHO_LIST"
+                    fi
+                fi
+                
+                # Check all files in MacOS directory
+                find "$APP_MACOS_DIR" -type f 2>/dev/null | while IFS= read -r file; do
+                    file_type=$(file "$file" 2>/dev/null)
+                    if [[ "$file_type" == *"Mach-O"* ]]; then
+                        echo "$file" >> "$MACHO_LIST"
+                    fi
+                done
+            fi
+        fi
+    fi
+    
+    # Final sanity check and deduplication
+    if [ -f "$MACHO_LIST" ]; then
+        sort "$MACHO_LIST" | uniq > "${TEMP_DIR}/final_list.txt"
+        mv "${TEMP_DIR}/final_list.txt" "$MACHO_LIST"
+    fi
+    
+    local binary_count=$(wc -l < "$MACHO_LIST" | xargs)
+    echo -e "${GREEN}[+] Found ${binary_count} Mach-O binaries${NC}" | tee -a "$CONSOLE_LOG"
+    
+    return $binary_count
 }
 
 # Function to check if a binary has LC_LOAD_WEAK_DYLIB commands
@@ -252,7 +341,8 @@ check_code_signing() {
         # Add to library validation vulnerability log
         echo "$binary|MISSING_LIBRARY_VALIDATION" >> "$LIBRARY_VALIDATION_LOG"
         
-        return "true"
+        echo "true"
+        return
     fi
     
     # Check entitlements
@@ -265,7 +355,8 @@ check_code_signing() {
         echo "$binary|DISABLED_LIBRARY_VALIDATION" >> "$LIBRARY_VALIDATION_LOG"
         
         has_disable_lib_validation=true
-        return "true"
+        echo "true"
+        return
     fi
     
     echo "false"
@@ -297,20 +388,17 @@ main() {
     echo "# List of All Scanned Executables" > "$EXECUTABLE_LIST"
     echo "" >> "$EXECUTABLE_LIST"
     
-    # Get list of Mach-O binaries
-    macho_list_file=$(find_macho_files)
+    # Find Mach-O files
+    find_macho_files
+    binary_count=$?
     
-    if [ ! -s "$macho_list_file" ]; then
+    if [ "$binary_count" -eq 0 ]; then
         echo -e "${RED}[-] No Mach-O files found in ${SCAN_DIR}${NC}" | tee -a "$CONSOLE_LOG"
         echo "No Mach-O files found." >> "$MASTER_LOG"
         rm -rf "$TEMP_DIR"
+        rm -rf "$OUTPUT_DIR"  # Clean up output directory since we have no results
         exit 1
     fi
-    
-    # Count the number of binaries
-    binary_count=$(wc -l < "$macho_list_file" | xargs)
-    echo -e "${GREEN}[+] Found ${binary_count} Mach-O binaries${NC}" | tee -a "$CONSOLE_LOG"
-    echo "Found ${binary_count} Mach-O binaries" >> "$MASTER_LOG"
     
     # Variables to track vulnerability counts
     weak_vuln_count=0
@@ -359,7 +447,7 @@ main() {
             total_vuln_count=$((total_vuln_count + 1))
         fi
         
-    done < "$macho_list_file"
+    done < "$MACHO_LIST"
     
     # Print summary
     echo "===============================================================" | tee -a "$CONSOLE_LOG"
