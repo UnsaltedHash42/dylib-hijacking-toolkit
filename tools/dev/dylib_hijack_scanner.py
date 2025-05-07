@@ -489,9 +489,8 @@ class DylibHijackScanner:
         return vulnerabilities
 
     def _check_library_validation(self, binary_path: str) -> List[Vulnerability]:
-        """Check for library validation vulnerabilities."""
+        """Check for library validation vulnerabilities, but only if the binary loads external dylibs that could be hijacked."""
         vulnerabilities = []
-        
         try:
             # Check code signing
             cs_info = subprocess.check_output(
@@ -499,27 +498,49 @@ class DylibHijackScanner:
                 universal_newlines=True,
                 stderr=subprocess.DEVNULL
             )
-            
             has_hardened_runtime = "runtime" in cs_info
             has_library_validation = "library-validation" in cs_info
-            
-            if not has_library_validation:
+
+            # Get otool output to find loaded dylibs
+            otool_output = subprocess.check_output(
+                ["otool", "-l", binary_path],
+                universal_newlines=True,
+                stderr=subprocess.DEVNULL
+            )
+            # Find all loaded dylibs
+            dylib_patterns = [
+                r'LC_LOAD_DYLIB.*?name (.*?) \(',
+                r'LC_LOAD_WEAK_DYLIB.*?name (.*?) \(',
+                r'LC_REEXPORT_DYLIB.*?name (.*?) \(',
+                r'LC_LOAD_UPWARD_DYLIB.*?name (.*?) \('
+            ]
+            loaded_dylibs = []
+            for pat in dylib_patterns:
+                loaded_dylibs += re.findall(pat, otool_output)
+            # Filter to only external, non-SIP-protected, non-@rpath/loader/executable dylibs
+            external_dylibs = []
+            for dylib in loaded_dylibs:
+                if dylib.startswith('@rpath') or dylib.startswith('@loader_path') or dylib.startswith('@executable_path'):
+                    continue
+                if any(sip in dylib for sip in [
+                    '/System/Library', '/usr/lib', '/usr/local/lib', '/opt/homebrew/lib']):
+                    continue
+                external_dylibs.append(dylib)
+            if not has_library_validation and external_dylibs:
                 vuln = Vulnerability(
                     binary_path=binary_path,
-                    dylib_path="N/A",
+                    dylib_path=", ".join(external_dylibs),
                     severity=Severity.HIGH,
                     vulnerability_type=VulnerabilityType.LIBRARY_VALIDATION,
-                    description="Missing library validation",
+                    description=f"Missing library validation and loads external dylibs: {', '.join(external_dylibs)}",
                     mitigation="Enable library validation in code signing",
-                    why_exploitable="The binary is not protected by library validation, allowing unsigned or malicious libraries to be loaded.",
+                    why_exploitable=f"The binary is not protected by library validation and loads external dylibs ({', '.join(external_dylibs)}), allowing unsigned or malicious libraries to be loaded.",
                     exploit_complexity="Medium",
                     affected_versions=[platform.mac_ver()[0]]
                 )
                 vulnerabilities.append(vuln)
-                
         except subprocess.CalledProcessError:
             pass
-            
         return vulnerabilities
 
     def _resolve_rpath(self, rpath: str, binary_path: str) -> Optional[str]:
