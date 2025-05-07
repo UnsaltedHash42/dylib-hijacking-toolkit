@@ -124,8 +124,9 @@
             <div class="binary-header collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-{{ binary_id }}" aria-expanded="false">
                 <span>{{ binary }}</span>
                 <span>
-                    <span class="severity-badge severity-{{ vulns|map(attribute='severity')|max|lower }}">
-                        {{ vulns|map(attribute='severity')|max }}
+                    {% set max_severity = vulns|map(attribute='severity')|map(attribute='value')|list|sort|last %}
+                    <span class="severity-badge severity-{{ max_severity|lower }}">
+                        {{ max_severity }}
                     </span>
                     <span class="collapse-arrow">&#9654;</span>
                 </span>
