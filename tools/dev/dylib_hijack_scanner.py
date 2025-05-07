@@ -61,6 +61,7 @@ class Vulnerability:
     vulnerability_type: VulnerabilityType
     description: str
     mitigation: str
+    why_exploitable: str
     cve_reference: Optional[str] = None
     exploit_complexity: Optional[str] = None
     affected_versions: Optional[List[str]] = None
@@ -222,6 +223,7 @@ class DylibHijackScanner:
                     vulnerability_type=VulnerabilityType.WEAK_DYLIB,
                     description=f"Missing weak dylib: {dylib} (Current version: {current_version}, Compat version: {compat_version})",
                     mitigation="Implement proper dylib loading restrictions and code signing",
+                    why_exploitable="The binary loads a weak dylib that is missing or writable in an unprotected location, allowing an attacker to place a malicious dylib that will be loaded at runtime.",
                     exploit_complexity="Medium" if is_writable else "High",
                     affected_versions=[platform.mac_ver()[0]],
                     amfi_flags={
@@ -283,6 +285,7 @@ class DylibHijackScanner:
                         vulnerability_type=VulnerabilityType.RPATH_HIJACKING,
                         description=f"RPATH hijacking possible: {rpath} (Position {i+1} of {len(rpaths)})",
                         mitigation="Use @rpath with proper restrictions or remove unnecessary RPATHs",
+                        why_exploitable="The binary uses an RPATH that is writable or appears earlier in the search order, allowing an attacker to place a malicious dylib that will be loaded before the legitimate one.",
                         exploit_complexity="Medium" if is_writable else "High",
                         affected_versions=[platform.mac_ver()[0]],
                         amfi_flags={
@@ -315,6 +318,7 @@ class DylibHijackScanner:
                     vulnerability_type=VulnerabilityType.REEXPORT_DYLIB,
                     description=f"Re-export dylib vulnerability: {dylib}",
                     mitigation="Implement proper dylib loading restrictions and code signing",
+                    why_exploitable="The binary re-exports a dylib that does not exist, allowing an attacker to provide a malicious replacement.",
                     exploit_complexity="High",
                     affected_versions=[platform.mac_ver()[0]]
                 )
@@ -338,6 +342,7 @@ class DylibHijackScanner:
                     vulnerability_type=VulnerabilityType.UPWARD_DYLIB,
                     description=f"Upward dylib vulnerability: {dylib}",
                     mitigation="Implement proper dylib loading restrictions and code signing",
+                    why_exploitable="The binary loads an upward dylib that does not exist, allowing an attacker to provide a malicious replacement.",
                     exploit_complexity="High",
                     affected_versions=[platform.mac_ver()[0]]
                 )
@@ -412,6 +417,7 @@ class DylibHijackScanner:
                 vulnerability_type=VulnerabilityType.DLOPEN_HIJACKING,
                 description=f"Potential dlopen hijacking: {dylib}",
                 mitigation="Use absolute paths or implement proper dylib loading restrictions",
+                why_exploitable="The binary calls dlopen with a relative or leaf name, allowing an attacker to control which dylib is loaded if the search path is writable.",
                 exploit_complexity="Medium" if is_writable else "High",
                 affected_versions=[platform.mac_ver()[0]],
                 amfi_flags={
@@ -463,6 +469,7 @@ class DylibHijackScanner:
                     vulnerability_type=VulnerabilityType.ENV_VAR_HIJACKING,
                     description="Environment variable hijacking possible",
                     mitigation="Enable library validation and hardened runtime",
+                    why_exploitable="The binary does not have restrictions that block DYLD_INSERT_LIBRARIES, allowing an attacker to inject a malicious dylib at load time.",
                     exploit_complexity="Low",
                     affected_versions=[platform.mac_ver()[0]],
                     exploitation_command=f"DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib {binary_path}",
@@ -504,6 +511,7 @@ class DylibHijackScanner:
                     vulnerability_type=VulnerabilityType.LIBRARY_VALIDATION,
                     description="Missing library validation",
                     mitigation="Enable library validation in code signing",
+                    why_exploitable="The binary is not protected by library validation, allowing unsigned or malicious libraries to be loaded.",
                     exploit_complexity="Medium",
                     affected_versions=[platform.mac_ver()[0]]
                 )
@@ -675,7 +683,7 @@ class DylibHijackScanner:
         with open(report_path, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(['Binary Path', 'Dylib Path', 'Severity', 'Vulnerability Type',
-                           'Description', 'Mitigation', 'CVE Reference', 'Exploit Complexity',
+                           'Description', 'Mitigation', 'Why Exploitable', 'CVE Reference', 'Exploit Complexity',
                            'Exploitation Command'])
             
             for vuln in self.vulnerabilities:
@@ -686,6 +694,7 @@ class DylibHijackScanner:
                     vuln.vulnerability_type.value,
                     vuln.description,
                     vuln.mitigation,
+                    vuln.why_exploitable,
                     vuln.cve_reference or '',
                     vuln.exploit_complexity or '',
                     vuln.exploitation_command or ''
@@ -726,6 +735,7 @@ class DylibHijackScanner:
                         f.write(f"- Dylib: {vuln.dylib_path}\n")
                         f.write(f"- Description: {vuln.description}\n")
                         f.write(f"- Mitigation: {vuln.mitigation}\n")
+                        f.write(f"- Why Exploitable: {vuln.why_exploitable}\n")
                         if vuln.cve_reference:
                             f.write(f"- CVE: {vuln.cve_reference}\n")
                         if vuln.exploitation_command:
@@ -789,6 +799,7 @@ class DylibHijackScanner:
                         f.write(f"        Dylib: {v.dylib_path}\n")
                         f.write(f"        Desc: {v.description}\n")
                         f.write(f"        Mitigation: {v.mitigation}\n")
+                        f.write(f"        Why Exploitable: {v.why_exploitable}\n")
                         if v.exploit_complexity: f.write(f"        Exploit Complexity: {v.exploit_complexity}\n")
                         if v.cve_reference: f.write(f"        CVE: {v.cve_reference}\n")
                 f.write("\n")
@@ -798,7 +809,7 @@ class DylibHijackScanner:
         """Generate a grepable report: one vulnerability per line, tab-separated."""
         report_path = self.output_dir / f"dylib_scan_report_{timestamp}.grep"
         with open(report_path, 'w') as f:
-            f.write("Bundle\tBinary\tSeverity\tType\tDylib\tDescription\tMitigation\tExploit_Complexity\tCVE\n")
+            f.write("Bundle\tBinary\tSeverity\tType\tDylib\tDescription\tMitigation\tWhy_Exploitable\tExploit_Complexity\tCVE\n")
             for v in self.vulnerabilities:
                 bundle = self._get_bundle_path(v.binary_path)
                 fields = [
@@ -806,6 +817,7 @@ class DylibHijackScanner:
                     v.dylib_path,
                     v.description.replace('\t',' ').replace('\n',' '),
                     v.mitigation.replace('\t',' ').replace('\n',' '),
+                    v.why_exploitable.replace('\t',' ').replace('\n',' '),
                     v.exploit_complexity or 'N/A', v.cve_reference or 'N/A'
                 ]
                 f.write("\t".join(fields)+"\n")

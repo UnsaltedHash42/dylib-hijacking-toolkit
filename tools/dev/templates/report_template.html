@@ -120,7 +120,8 @@
         <div class="bundle-section mb-4">
             <h3 class="mb-3">{{ bundle }}</h3>
             {% for binary, vulns in binaries.items() %}
-            <div class="binary-header collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index0 }}-{{ loop.parent.loop.index0 }}" aria-expanded="false">
+            {% set binary_id = (bundle ~ '-' ~ binary)|replace('/', '_')|replace('.', '_')|replace(' ', '_') %}
+            <div class="binary-header collapsed" data-bs-toggle="collapse" data-bs-target="#collapse-{{ binary_id }}" aria-expanded="false">
                 <span>{{ binary }}</span>
                 <span>
                     <span class="severity-badge severity-{{ vulns|map(attribute='severity')|max|lower }}">
@@ -129,13 +130,14 @@
                     <span class="collapse-arrow">&#9654;</span>
                 </span>
             </div>
-            <div class="collapse" id="collapse-{{ loop.index0 }}-{{ loop.parent.loop.index0 }}">
+            <div class="collapse" id="collapse-{{ binary_id }}">
                 {% for vuln in vulns %}
                 <div class="vuln-card">
                     <div class="vuln-title">{{ vuln.vulnerability_type }}</div>
                     <div class="vuln-meta">Dylib: <span class="text-info">{{ vuln.dylib_path }}</span></div>
                     <div class="vuln-details">{{ vuln.description }}</div>
                     <div><strong>Mitigation:</strong> {{ vuln.mitigation }}</div>
+                    {% if vuln.why_exploitable %}<div><strong>Why is this exploitable?</strong> {{ vuln.why_exploitable }}</div>{% endif %}
                     {% if vuln.cve_reference %}<div><strong>CVE:</strong> {{ vuln.cve_reference }}</div>{% endif %}
                     {% if vuln.exploit_complexity %}<div><strong>Exploit Complexity:</strong> {{ vuln.exploit_complexity }}</div>{% endif %}
                     {% if vuln.affected_versions %}<div><strong>Affected Versions:</strong> {{ vuln.affected_versions|join(', ') }}</div>{% endif %}
