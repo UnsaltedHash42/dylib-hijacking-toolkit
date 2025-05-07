@@ -596,12 +596,17 @@ main() {
         echo "" >> "$SUMMARY_LOG"
     fi
     
-    if [ $envvar_vuln_count -gt 0 ]; then
+     if [ $envvar_vuln_count -gt 0 ]; then
         echo "ENVIRONMENT VARIABLE HIJACKING VULNERABILITIES:" >> "$SUMMARY_LOG"
         echo "These binaries can be exploited with DYLD_INSERT_LIBRARIES:" >> "$SUMMARY_LOG"
-        R_LOG" | cut -d'|' -f1,2 | sort | uniq | sed 's/|/ -> /g' >> "$SUMMARY_LOG"
+        grep -v "^#" "$ENV_VAR_LOG" \
+            | cut -d'|' -f1,2 \
+            | sort | uniq \
+            | sed 's/|/ -> /g' \
+            >> "$SUMMARY_LOG"
         echo "" >> "$SUMMARY_LOG"
     fi
+
     
     echo "For detailed analysis, see the master report file: $MASTER_LOG" >> "$SUMMARY_LOG"
     echo "" >> "$SUMMARY_LOG"
@@ -631,9 +636,12 @@ main() {
             echo "" >> "$TARGET_LIST"
         fi
         
-        if [ $envvar_vuln_count -gt 0 ]; then
+                if [ $envvar_vuln_count -gt 0 ]; then
             echo "## Environment Variable Hijacking Targets" >> "$TARGET_LIST"
-            grep -v "^#" "$ENV_VAR_LOG" | sort | uniq | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' >> "$TARGET_LIST"
+            grep -v "^#" "$ENV_VAR_LOG" \
+                | sort | uniq \
+                | awk -F'|' '{printf "%-60s => %s\n", $1, $2}' \
+                >> "$TARGET_LIST"
             echo "" >> "$TARGET_LIST"
             
             # Generate quick exploitation commands
@@ -643,10 +651,17 @@ main() {
             echo "# Use these commands to test DYLD_INSERT_LIBRARIES hijacking with the basic_injection.dylib template" >> "$EXPLOITS_FILE"
             echo "" >> "$EXPLOITS_FILE"
             
-            grep -v "^#" "$ENV_VAR_LOG" | sort | uniq | awk -F'|' '{printf "DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib %s\n", $1}' >> "$EXPLOITS_FILE"
+            grep -v "^#" "$ENV_VAR_LOG" \
+                | sort | uniq \
+                | awk -F'|' '{printf "DYLD_INSERT_LIBRARIES=/path/to/malicious.dylib %s\n", $1}' \
+                >> "$EXPLOITS_FILE"
             
             echo -e "${GREEN}[+] Exploitation commands: ${EXPLOITS_FILE}${NC}" | tee -a "$CONSOLE_LOG"
         fi
+        
+        echo -e "${GREEN}[+] High-value targets list: ${TARGET_LIST}${NC}" | tee -a "$CONSOLE_LOG"
+    fi
+
         
         echo -e "${GREEN}[+] High-value targets list: ${TARGET_LIST}${NC}" | tee -a "$CONSOLE_LOG"
     fi
