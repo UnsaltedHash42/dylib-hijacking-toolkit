@@ -467,7 +467,7 @@ check_env_var_hijacking() {
     fi
 }
 
-}
+
 
 
 # Main function
