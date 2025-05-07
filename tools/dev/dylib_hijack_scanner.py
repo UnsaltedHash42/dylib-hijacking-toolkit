@@ -531,24 +531,30 @@ class DylibHijackScanner:
             logging.error(f"Directory {directory} does not exist")
             return
 
-        # First, collect all potential binaries
-        print(f"{Fore.YELLOW}Collecting potential binaries...{Style.RESET_ALL}")
-        binaries = []
+        # First, collect all potential file paths
+        print(f"{Fore.YELLOW}Collecting files for binary detection...{Style.RESET_ALL}")
+        file_paths = []
         for root, _, files in os.walk(directory):
             for file in files:
-                file_path = Path(root) / file
-                try:
-                    if self._is_binary(file_path):
-                        binaries.append(str(file_path))
-                except Exception as e:
-                    if self.verbose:
-                        logging.error(f"Error checking file {file_path}: {e}")
+                file_paths.append(Path(root) / file)
+
+        if not file_paths:
+            print(f"{Fore.YELLOW}No files found in {directory}{Style.RESET_ALL}")
+            return
+
+        print(f"{Fore.GREEN}Found {len(file_paths)} files, detecting binaries with {max_workers} workers...{Style.RESET_ALL}")
+        binaries = []
+        # Parallel binary detection
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for is_bin, file_path in zip(executor.map(self._is_binary, file_paths), file_paths):
+                if is_bin:
+                    binaries.append(str(file_path))
 
         if not binaries:
             print(f"{Fore.YELLOW}No binaries found in {directory}{Style.RESET_ALL}")
             return
 
-        print(f"{Fore.GREEN}Found {len(binaries)} potential binaries to scan{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}Found {len(binaries)} binaries to scan{Style.RESET_ALL}")
         
         start_time = time.time()
         # Scan binaries with progress bar (show ETA)
@@ -588,23 +594,26 @@ class DylibHijackScanner:
         print(f"{Fore.BLUE}Scan time: {end_time - start_time:.2f} seconds{Style.RESET_ALL}\n")
 
     def _is_binary(self, file_path: Path) -> bool:
-        """Check if a file is a binary executable."""
+        """Check if a file is a Mach-O binary by inspecting the magic number."""
+        # Only regular files
+        if not file_path.is_file():
+            return False
+        # Mach-O magic numbers (32/64 bit, little/big endian, FAT)
+        MACHO_MAGICS = {
+            b'\xfe\xed\xfa\xce',  # MH_MAGIC (big-endian 32-bit)
+            b'\xce\xfa\xed\xfe',  # MH_CIGAM (little-endian 32-bit)
+            b'\xfe\xed\xfa\xcf',  # MH_MAGIC_64 (big-endian 64-bit)
+            b'\xcf\xfa\xed\xfe',  # MH_CIGAM_64 (little-endian 64-bit)
+            b'\xca\xfe\xba\xbe',  # FAT_MAGIC (big-endian)
+            b'\xbe\xba\xfe\xca',  # FAT_CIGAM (little-endian)
+        }
         try:
-            # Use subprocess.run with capture_output to handle binary output
-            result = subprocess.run(
-                ["file", str(file_path)],
-                capture_output=True,
-                text=True,
-                errors='replace'  # Replace invalid characters instead of raising error
-            )
-            
-            if result.returncode != 0:
-                return False
-                
-            return "Mach-O" in result.stdout
+            with open(file_path, 'rb') as f:
+                magic = f.read(4)
+            return magic in MACHO_MAGICS
         except Exception as e:
             if self.verbose:
-                logging.error(f"Error checking if {file_path} is binary: {e}")
+                logging.error(f"Error reading file header {file_path}: {e}")
             return False
 
     def generate_reports(self):
